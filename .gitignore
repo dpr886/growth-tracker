@@ -1,0 +1,7 @@
+.env
+last_processed_ts.txt
+__pycache__/
+*.pyc
+.venv/
+logs/
+.claude/
