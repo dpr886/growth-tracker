@@ -192,8 +192,29 @@ URL of the posting: {url}
         return None
 
 
+def is_duplicate(link_to_apply: str) -> bool:
+    """Check if an entry with this Link to Apply URL already exists in Notion."""
+    try:
+        results = notion.databases.query(
+            database_id=NOTION_DATABASE_ID,
+            filter={"property": "Link to Apply", "url": {"equals": link_to_apply}},
+            page_size=1,
+        )
+        if results["results"]:
+            log.info(f"⏭️ Duplicate found for {link_to_apply}, skipping.")
+            return True
+    except Exception as e:
+        log.warning(f"Dedup check failed: {e}")
+    return False
+
+
 def create_notion_entry(details: dict, source: str, job_listed_date: str | None):
     """Create a new page in the Notion database."""
+    # Dedup: skip if this job URL already exists
+    link = details.get("link_to_apply")
+    if link and is_duplicate(link):
+        return False
+
     properties = {
         "Company Name": {"title": [{"text": {"content": details.get("company_name") or "Unknown"}}]},
     }
