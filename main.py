@@ -134,12 +134,24 @@ def extract_job_urls_from_page(page_content: str, source_url: str) -> list[str]:
     return job_urls
 
 
-def extract_job_details(page_content: str, url: str, source_url: str | None) -> dict | None:
+def extract_job_details(page_content: str, url: str, source_url: str | None, linkedin_post_content: str | None = None) -> dict | None:
     """Use Claude to extract structured job details from page content."""
-    if not page_content:
+    if not page_content and not linkedin_post_content:
         return None
 
-    prompt = f"""Extract job posting details from this HTML content.
+    content_sections = ""
+    if linkedin_post_content:
+        content_sections += f"""LinkedIn Post Content (use this for company name if not found in job page):
+{linkedin_post_content[:8000]}
+
+---
+
+"""
+    if page_content:
+        content_sections += f"""Job Page HTML Content:
+{page_content}"""
+
+    prompt = f"""Extract job posting details from the content below.
 Return ONLY a JSON object with these fields (use null for any field not found):
 
 {{
@@ -153,6 +165,7 @@ Return ONLY a JSON object with these fields (use null for any field not found):
 }}
 
 Important:
+- For company_name, look in both the job page AND the LinkedIn post content. Check the LinkedIn poster's profile/company, the post text, or the job page title/header. Never return null or "Unknown" if a company is mentioned anywhere.
 - Default job_type to "Full-time" if not specified
 - For location, combine all listed locations with semicolons
 - For compensation, include the full range as stated
@@ -161,8 +174,7 @@ Important:
 
 URL of the posting: {url}
 
-HTML Content:
-{page_content}"""
+{content_sections}"""
 
     try:
         response = claude.messages.create(
@@ -282,11 +294,16 @@ def poll_and_process():
             else:
                 job_urls.append(u)
 
-        # If only LinkedIn post URL, fetch its page and look for embedded job links
+        # Fetch LinkedIn post content if available (used for company name extraction)
+        linkedin_post_content = None
+        if linkedin_post_url:
+            log.info(f"Fetching LinkedIn post for context: {linkedin_post_url}")
+            linkedin_post_content = fetch_page_content(linkedin_post_url)
+
+        # If only LinkedIn post URL, scan for embedded job links
         if not job_urls and linkedin_post_url:
             log.info(f"LinkedIn post detected, scanning for embedded job URLs...")
-            post_content = fetch_page_content(linkedin_post_url)
-            embedded_job_urls = extract_job_urls_from_page(post_content, linkedin_post_url)
+            embedded_job_urls = extract_job_urls_from_page(linkedin_post_content or "", linkedin_post_url)
             if embedded_job_urls:
                 job_urls = embedded_job_urls
             else:
@@ -307,7 +324,12 @@ def poll_and_process():
         for job_url in job_urls:
             log.info(f"Fetching: {job_url}")
             content = fetch_page_content(job_url)
-            details = extract_job_details(content, job_url, source_url)
+            # Pass LinkedIn post content for better company name extraction
+            # Also include the original Slack message text as fallback context
+            post_ctx = linkedin_post_content if (job_url != linkedin_post_url) else None
+            slack_ctx = f"Slack message text: {text}\n\n" if text else ""
+            combined_post_ctx = (slack_ctx + (post_ctx or "")).strip() or None
+            details = extract_job_details(content, job_url, source_url, linkedin_post_content=combined_post_ctx)
 
             if details:
                 # Use the direct job URL as Link to Apply if Claude didn't find one
